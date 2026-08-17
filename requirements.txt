@@ -1,0 +1,10 @@
+praw
+python-dotenv
+aiogram 
+asyncpraw 
+aiosqlite
+Pillow
+ffmpeg-python
+deep-translator
+pytesseract
+emoji
