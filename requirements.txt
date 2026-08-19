@@ -1,0 +1,11 @@
+aiogram
+asyncpraw
+aiosqlite
+python-dotenv
+Pillow
+ffmpeg-python
+deep-translator
+pytesseract
+emoji
+aiohttp
+aiofiles
