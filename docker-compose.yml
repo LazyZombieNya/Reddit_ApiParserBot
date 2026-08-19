@@ -14,5 +14,5 @@ services:
       - TZ=Asia/Yekaterinburg
     volumes:
       # Пробрасываем БД и конфиг наружу, чтобы они не удалялись при пересоздании контейнера
-      - ./reddit_bot.db:/app/reddit_bot.db
-      - ./config.json:/app/config.json
+      - /opt/reddit_parser/reddit_bot.db:/app/reddit_bot.db
+      - /opt/reddit_parser/config.json:/app/config.json
