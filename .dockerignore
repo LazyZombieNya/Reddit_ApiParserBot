@@ -1,0 +1,29 @@
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Системные папки и настройки IDE
+.git
+.idea
+.vscode
+
+# Виртуальное окружение
+venv
+env
+.venv
+
+# Папка с локальным Windows-версией FFmpeg
+lib/
+
+# Временные медиафайлы бота
+temp_data/
+
+# Локальная база данных (монтируется через volumes)
+*.db
+reddit_bot.db
+
+# Конфиги и секреты
+.env
+.env.example

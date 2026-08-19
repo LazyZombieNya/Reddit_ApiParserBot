@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  reddit-bot:
+    build: .
+    container_name: reddit_parser_bot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Yekaterinburg
+    volumes:
+      # Пробрасываем БД и конфиг наружу, чтобы они не удалялись при пересоздании контейнера
+      - ./reddit_bot.db:/app/reddit_bot.db
+      - ./config.json:/app/config.json
