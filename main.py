@@ -231,7 +231,7 @@ async def process_submission(bot: Bot, submission, target_config: dict):
     # ВРЕМЕННЫЙ ЛОГ ДЛЯ СБОРА ФЛАЕРОВ (потом можно удалить)
     # Локальная переменная для тегов текущего поста
     tag_sub_text = ""
-    if submission.link_flair_text:
+    if submission.link_flair_text or submission.subreddit.display_name:
         tag_sub_text = f"[ТЕГ] Сабреддит: {submission.subreddit.display_name} | Флаер: {submission.link_flair_text}"
         logger.info(tag_sub_text.strip())
 
