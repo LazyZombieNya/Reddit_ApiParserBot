@@ -16,3 +16,6 @@ services:
       # Пробрасываем БД и конфиг наружу, чтобы они не удалялись при пересоздании контейнера
       - /opt/reddit_parser/reddit_bot.db:/app/reddit_bot.db
       - /opt/reddit_parser/config.json:/app/config.json
+
+      # Папка для временных медиафайлов
+      - /temp_data/reddit_parser:/app/temp_data
