@@ -233,7 +233,7 @@ async def process_submission(bot: Bot, submission, target_config: dict):
     tag_sub_text = ""
     if submission.link_flair_text or submission.subreddit.display_name:
         tag_sub_text = " • ".join(
-            f"`{value}`"
+            f"<code>{value}</code>"
             for value in (
                 submission.subreddit.display_name,
                 submission.link_flair_text,
