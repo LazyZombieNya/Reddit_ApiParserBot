@@ -9,3 +9,4 @@ pytesseract
 emoji
 aiohttp
 aiofiles
+requests

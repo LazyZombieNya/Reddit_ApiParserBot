@@ -232,7 +232,14 @@ async def process_submission(bot: Bot, submission, target_config: dict):
     # Локальная переменная для тегов текущего поста
     tag_sub_text = ""
     if submission.link_flair_text or submission.subreddit.display_name:
-        tag_sub_text = f"[ТЕГ] Сабреддит: {submission.subreddit.display_name} | Флаер: {submission.link_flair_text}"
+        tag_sub_text = " • ".join(
+            f"`{value}`"
+            for value in (
+                submission.subreddit.display_name,
+                submission.link_flair_text,
+            )
+            if value
+        )
         logger.info(tag_sub_text.strip())
 
     logger.info(f"Обработка [{submission.id}]: {submission.title} -> {tg_channel}")
