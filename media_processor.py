@@ -11,8 +11,8 @@ Media Processor - модуль подготовки медиафайлов дл�
 Временные файлы хранятся в директории `temp_data` и могут быть удалены
 после завершения работы с помощью функции `clear_data_folder()`.
 
-Version: 1.1.0
-fix: добавление расширения jpg
+Version: 1.2.0
+add:Добавлено объединение видео с аудиодорожкой Reddit
 """
 
 import asyncio
@@ -309,6 +309,25 @@ async def _encode_video(input_path, temp_output, video_bitrate, audio_bitrate, s
 
     return True
 
+async def mux_video_audio(video_path, audio_path, output_path):
+    """Склеивает видео и аудио без пережатия (прямое копирование потоков)."""
+    command = [
+        FFMPEG_PATH,
+        "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-c:v", "copy",
+        "-c:a", "aac",  # Конвертируем аудио в AAC для идеальной совместимости с Telegram
+        output_path
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await process.communicate()
+    return process.returncode == 0
+
 #Сжатие видео с помощью FFMPEG. Если после прохода файл всё ещё не влезает
 #в лимит — пересчитываем битрейт по фактическому результату и повторяем.
 async def compress_video(input_path, output_path):
@@ -422,7 +441,7 @@ async def gif_to_mp4(input_path, output_path):
     await process.communicate()
     return output_path
 
-#Скачивает медиафайлы на диск со сжатием
+# Скачивает медиафайлы на диск со сжатием и склейкой звука (для Reddit DASH)
 async def download_media(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/122.0.0.0",
@@ -430,85 +449,117 @@ async def download_media(url):
     }
 
     ext = get_file_extension(url)
-    name_only = os.path.splitext(url.split("/")[-1])[0].lower()
+    clean_url = url.split('?')[0]
+    name_only = os.path.splitext(clean_url.split("/")[-1])[0].lower()
     filename = f"temp_{name_only[:40]}.{ext}"
 
     os.makedirs(DATA_FOLDER, exist_ok=True)
     file_path = os.path.join(DATA_FOLDER, filename)
 
-    # total=900: максимум 15 минут на полное скачивание файла
-    # sock_read=45: если сервер не присылает ни одного байта данных в течение 45 секунд — рвем соединение
     timeout = aiohttp.ClientTimeout(total=900, sock_read=45, sock_connect=30)
+    is_reddit_video = "v.redd.it" in clean_url and ext == 'mp4'
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
+            temp_path = file_path + "_temp"
 
-                    temp_path = file_path + "_temp"
-                    # Потоковое скачивание (chunks), чтобы не ловить TimeoutError на чтении всего файла в память
+            # --- ЭТАП СКАЧИВАНИЯ ---
+            if is_reddit_video:
+                base_url = clean_url.rsplit('/', 1)[0]
+
+                # РАСШИРЕННЫЙ СПИСОК: Добавлены новые варианты расположения звука для формата CMAF
+                audio_urls = [
+                    f"{base_url}/DASH_AUDIO_128.mp4",
+                    f"{base_url}/DASH_AUDIO_64.mp4",
+                    f"{base_url}/DASH_audio.mp4",
+                    f"{base_url}/CMAF_AUDIO_128.mp4",
+                    f"{base_url}/CMAF_AUDIO_64.mp4",
+                    f"{base_url}/audio",
+                    f"{base_url}/audio.mp4"
+                ]
+
+                # 1. Качаем немое видео
+                async with session.get(url, headers=headers) as resp_v:
+                    if resp_v.status != 200: return None
                     async with aiofiles.open(temp_path, 'wb') as f:
-                        async for chunk in response.content.iter_chunked(1024 * 1024):
-                            await f.write(chunk)
+                        async for chunk in resp_v.content.iter_chunked(1024 * 1024): await f.write(chunk)
 
-                    size_file = os.path.getsize(temp_path)
-                    print(f"Downloaded {temp_path} size {format_size(size_file)}")
+                # 2. Ищем и качаем звук (перебираем все варианты из списка)
+                temp_aud = file_path + "_aud.mp4"
+                has_audio = False
+                for aud_url in audio_urls:
+                    async with session.get(aud_url, headers=headers) as resp_a:
+                        if resp_a.status == 200:
+                            async with aiofiles.open(temp_aud, 'wb') as f:
+                                async for chunk in resp_a.content.iter_chunked(1024 * 1024): await f.write(chunk)
+                            has_audio = True
+                            break  # Если звук нашли - прерываем поиск
 
+                # 3. Склеиваем
+                if has_audio and os.path.getsize(temp_aud) > 0:
+                    print(f"[{name_only}] Найден звук, склеиваем...")
+                    temp_mux = file_path + "_mux.mp4"
+                    mux_ok = await mux_video_audio(temp_path, temp_aud, temp_mux)
+                    os.remove(temp_aud)
+                    if mux_ok:
+                        os.remove(temp_path)
+                        temp_path = temp_mux
+                else:
+                    if os.path.exists(temp_aud): os.remove(temp_aud)
+                    print(f"[{name_only}] Звука нет (немое видео или GIF).")
+            else:
+                # Стандартное скачивание (картинки, сторонние видео)
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        async with aiofiles.open(temp_path, 'wb') as f:
+                            async for chunk in response.content.iter_chunked(1024 * 1024):
+                                await f.write(chunk)
+                    else:
+                        print(f"Ошибка HTTP: {response.status} для {url}")
+                        return None
 
-                    # ПРОВЕРКА НА 0 КБ: Если файл пустой или загрузка оборвалась — прерываем процесс
-                    if not os.path.exists(temp_path) or size_file == 0:
-                        print(f"Ошибка: Скачанный файл пустой или соединение разорвано: {url}")
+            # --- ЭТАП ПРОВЕРКИ И СЖАТИЯ ---
+            size_file = os.path.getsize(temp_path)
+            print(f"Downloaded {temp_path} size {format_size(size_file)}")
+
+            if not os.path.exists(temp_path) or size_file == 0:
+                print(f"Ошибка: Скачанный файл пустой: {url}")
+                if os.path.exists(temp_path): os.remove(temp_path)
+                return None
+
+            if ext in ['jpeg', 'jpg', 'png', 'bmp', 'webp']:
+                shutil.move(temp_path, file_path)
+                image_parts = split_long_image(file_path, max_height=4000)
+                final_paths = []
+                for i, part in enumerate(image_parts):
+                    compressed_bytes = await compress_image(part)
+                    part_final_path = f"{file_path}_part{i}.{ext}" if len(image_parts) > 1 else file_path
+                    async with aiofiles.open(part_final_path, 'wb') as img_file:
+                        await img_file.write(compressed_bytes)
+                    final_paths.append(part_final_path)
+                    if part != file_path: os.remove(part)
+                if len(image_parts) > 1 and os.path.exists(file_path): os.remove(file_path)
+                return final_paths
+
+            elif ext in ['mp4', 'avi', 'mov', 'mkv', 'webm', 'gif']:
+                if ext == "gif":
+                    compressed_path = file_path.replace(".gif", ".mp4")
+                    await gif_to_mp4(temp_path, compressed_path)
+                    file_path = compressed_path
+                elif size_file < MAX_SIZE_VIDEO_MB * 1024 * 1024:
+                    shutil.move(temp_path, file_path)
+                else:
+                    success = await compress_video(temp_path, file_path)
+                    if not success:
+                        print(f"Failed to compress {temp_path} below limit.")
                         if os.path.exists(temp_path): os.remove(temp_path)
                         return None
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                return [file_path]
+            else:
+                os.remove(temp_path)
+                return None
 
-                    if ext in ['jpeg','jpg','png', 'bmp', 'webp']:
-                        shutil.move(temp_path, file_path)
-                        # Разрезаем файл (если он длинный)
-                        image_parts = split_long_image(file_path, max_height=4000)
-
-                        final_paths = []
-                        for i, part in enumerate(image_parts):
-                            # Сжимаем каждый кусок стандартной функцией
-                            compressed_bytes = await compress_image(part)
-                            part_final_path = f"{file_path}_part{i}.{ext}" if len(image_parts) > 1 else file_path
-
-                            async with aiofiles.open(part_final_path, 'wb') as img_file:
-                                await img_file.write(compressed_bytes)
-
-                            final_paths.append(part_final_path)
-
-                            # Удаляем сырой нарезанный кусок, чтобы не забивать диск
-                            if part != file_path:
-                                os.remove(part)
-
-                        # Удаляем оригинальный целый файл, если он был разрезан на части
-                        if len(image_parts) > 1 and os.path.exists(file_path):
-                            os.remove(file_path)
-
-                        return final_paths  # Возвращаем список путей
-
-                    elif ext in ['mp4', 'avi', 'mov', 'mkv', 'webm', 'gif']:
-                        if ext == "gif":
-                            compressed_path = file_path.replace(".gif", ".mp4")
-                            await gif_to_mp4(temp_path, compressed_path)
-                            file_path = compressed_path
-                        elif size_file < MAX_SIZE_VIDEO_MB * 1024 * 1024:
-                            shutil.move(temp_path, file_path)
-                        else:
-                            success = await compress_video(temp_path, file_path)
-                            if not success:
-                                print(f"Failed to compress {temp_path} below {MAX_SIZE_VIDEO_MB} MB, size {format_size(size_file)}")
-                                # os.remove(temp_path)
-                                return None
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                    else:
-                        os.remove(temp_path)
-                        return None
-
-                    return [file_path]
-                else:
-                    print(f"Ошибка HTTP: {response.status} для {url}")
     except asyncio.TimeoutError:
         print(f"Timeout while downloading: {url}")
         return None

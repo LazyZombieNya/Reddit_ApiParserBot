@@ -224,51 +224,84 @@ async def send_text_fallback(bot: Bot, tg_channel: str, caption_text: str, submi
 async def process_submission(bot: Bot, submission, target_config: dict):
     tg_channel = target_config["tg_channel"]
 
+    # 1. ПРОВЕРКА БАЗЫ ДАННЫХ
+    # Проверяем, обрабатывался ли этот пост ранее (отправлен, ошибка или отфильтрован).
     status = await check_post_status(submission.id, tg_channel)
     if status in ("sent", "sent_as_text", "failed", "filtered"):
         return
 
-    # ВРЕМЕННЫЙ ЛОГ ДЛЯ СБОРА ФЛАЕРОВ (потом можно удалить)
-    # Локальная переменная для тегов текущего поста
-    tag_sub_text = ""
+    # 2. ИНИЦИАЛИЗАЦИЯ СБОРЩИКА ТЕКСТА
+    # Используем список для сборки всех текстовых блоков.
+    # В конце мы объединим их через "\n\n". Это гарантирует, что если какой-то
+    # блок (например, текст с картинки) отсутствует, лишних пустых строк не будет.
+    caption_parts = []
+
+    # 3. ДОБАВЛЕНИЕ ТЕГОВ (САБРЕДДИТ И ФЛАЕР)
+    # Собираем название сабреддита и тег поста, оборачиваем в <code> для красоты.
     if submission.link_flair_text or submission.subreddit.display_name:
         tag_sub_text = " • ".join(
             f"<code>{value}</code>"
-            for value in (
-                submission.subreddit.display_name,
-                submission.link_flair_text,
-            )
+            for value in (submission.subreddit.display_name, submission.link_flair_text)
             if value
         )
-        logger.info(tag_sub_text.strip())
+        caption_parts.append(tag_sub_text)
+        logger.info(tag_sub_text)
 
     logger.info(f"Обработка [{submission.id}]: {submission.title} -> {tg_channel}")
 
     safe_title = format_reddit_text(submission.title)
     short_url = f"https://redd.it/{submission.id}"
 
-    # Переводим заголовок на русский
-    translate_title = translator.translate_text(safe_title)
-    caption_text = f"{tag_sub_text}\n\n<b>{translate_title}</b>\n\n"
+    # 4. ПЕРЕВОД ЗАГОЛОВКА
+    safe_title = format_reddit_text(submission.title)
 
-    # Проверяем, есть ли основной текст
+    if not safe_title.strip():
+        translate_title = ""
+    # Проверяем, есть ли в строке хотя бы одна буква (кириллица или латиница)
+    elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', safe_title):
+        # Если букв нет (только точка, цифры или смайлик), оставляем оригинал
+        translate_title = safe_title.strip()
+    else:
+        translate_title = translator.translate_text(safe_title)
+
+    if translate_title:
+        caption_parts.append(f"<b>{translate_title}</b>")
+
+    # 5. ПЕРЕВОД ОСНОВНОГО ТЕКСТА ПОСТА (ЕСЛИ ЕСТЬ)
     if submission.selftext:
+        # Берем только первые 700 символов, чтобы не превысить лимиты Telegram
         safe_text = format_reddit_text(submission.selftext[:700])
-        translated_text = translator.translate_text(safe_text)
-        caption_text += f"{translated_text}...\n\n" if len(submission.selftext) > 700 else f"{translated_text}\n\n"
 
+        if not safe_text.strip():
+            translated_text = ""
+        elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', safe_text):
+            translated_text = safe_text.strip()
+        else:
+            translated_text = translator.translate_text(safe_text)
+
+        if translated_text:
+            if len(submission.selftext) > 700:
+                caption_parts.append(f"{translated_text}...")
+            else:
+                caption_parts.append(translated_text)
+
+    # 6. ОБРАБОТКА ТЕКСТОВЫХ ПОСТОВ
+    # Если пост не содержит медиафайлов вообще (is_self = True),
+    # сразу собираем текст, отправляем и завершаем работу функции.
     if submission.is_self:
-        # Добавляем ссылку на сам пост Reddit
-        caption_text += f"\n<a href='{short_url}'>Пост на Reddit</a>"
+        caption_parts.append(f"<a href='{short_url}'>Пост на Reddit</a>")
+        caption_text = "\n\n".join(caption_parts)
+
         logger.info(f"[{submission.id}] Это чисто текстовый пост. Отправляем.")
         await send_text_fallback(bot, tg_channel, caption_text, submission.id)
         await asyncio.sleep(3)
         return
 
+    # 7. ПОИСК МЕДИАФАЙЛОВ
     media_urls = []
     is_direct_media = False
 
-    # 1. Проверка на Галерею (с сохранением оригинального порядка и поддержкой видео/гифок)
+    # А) Проверка на Галерею (несколько картинок/видео в одном посте)
     if hasattr(submission, "is_gallery") and submission.is_gallery:
         if hasattr(submission, "gallery_data") and hasattr(submission, "media_metadata"):
             for item in submission.gallery_data.get('items', []):
@@ -278,115 +311,113 @@ async def process_submission(bot: Bot, submission, target_config: dict):
 
                     if media_info['e'] == 'Image':
                         if 'u' in media_info['s']:
-                            img_url = media_info['s']['u'].replace('&amp;', '&')
-                            media_urls.append(img_url)
+                            media_urls.append(media_info['s']['u'].replace('&amp;', '&'))
                     elif media_info['e'] == 'AnimatedImage':
                         if 'mp4' in media_info['s']:
-                            vid_url = media_info['s']['mp4'].replace('&amp;', '&')
-                            media_urls.append(vid_url)
+                            media_urls.append(media_info['s']['mp4'].replace('&amp;', '&'))
                         elif 'gif' in media_info['s']:
-                            vid_url = media_info['s']['gif'].replace('&amp;', '&')
-                            media_urls.append(vid_url)
+                            media_urls.append(media_info['s']['gif'].replace('&amp;', '&'))
                     elif media_info['e'] == 'RedditVideo':
                         if 'fallbackUrl' in media_info:
-                            vid_url = media_info['fallbackUrl'].replace('&amp;', '&')
-                            media_urls.append(vid_url)
+                            media_urls.append(media_info['fallbackUrl'].replace('&amp;', '&'))
             if media_urls:
                 is_direct_media = True
 
-    # 2. Проверка на стандартное Reddit Видео
+    # Б) Проверка на стандартное одиночное Reddit Видео
     elif submission.is_video and hasattr(submission,
                                          "media") and submission.media and "reddit_video" in submission.media:
-        video_url = submission.media['reddit_video']['fallback_url']
-        media_urls.append(video_url)
+        media_urls.append(submission.media['reddit_video']['fallback_url'])
         is_direct_media = True
 
-    # 3. Проверка на сторонние видеоплееры (RedGifs, Gfycat и др.), для которых Reddit создал превью
+    # В) Проверка на сторонние видеоплееры (RedGifs и др., для которых Reddit создал превью)
     elif hasattr(submission, 'preview') and 'reddit_video_preview' in submission.preview:
-        video_url = submission.preview['reddit_video_preview']['fallback_url']
-        media_urls.append(video_url)
+        media_urls.append(submission.preview['reddit_video_preview']['fallback_url'])
         is_direct_media = True
 
-    # 4. Простая прямая ссылка на картинку/гифку
+    # Г) Простая прямая ссылка на картинку или гифку
     else:
         media_urls.append(submission.url)
         url_lower = submission.url.lower()
         if url_lower.endswith(('.jpg', '.jpeg', '.png', '.gif', '.mp4', '.webm')):
             is_direct_media = True
 
-    # Если медиа так и не нашлось, значит это внешняя ссылка (новости, статьи)
+    # 8. ОБРАБОТКА ВНЕШНИХ ССЫЛОК (НОВОСТИ, СТАТЬИ)
+    # Если медиа не найдено, значит ссылка ведет на другой сайт.
     if not is_direct_media:
         if not submission.is_self:
-            # Явно прикрепляем оригинальную ссылку к тексту
-            caption_text += f"🌐 <b>Внешняя ссылка:</b> <a href='{submission.url}'>{submission.url}</a>\n"
+            caption_parts.append(f"🌐 <b>Внешняя ссылка:</b> <a href='{submission.url}'>{submission.url}</a>")
 
-        # Добавляем Reddit ссылку и отправляем
-        caption_text += f"\n<a href='{short_url}'>Пост на Reddit</a>"
+        caption_parts.append(f"<a href='{short_url}'>Пост на Reddit</a>")
+        caption_text = "\n\n".join(caption_parts)
+
         logger.info(f"[{submission.id}] Это ссылка на сторонний ресурс: {submission.url}. Отправляем текст.")
         await send_text_fallback(bot, tg_channel, caption_text, submission.id)
         await asyncio.sleep(3)
         return
 
-    # СКАЧИВАНИЕ ФАЙЛОВ ЛОКАЛЬНО
+    # 9. СКАЧИВАНИЕ ЛОКАЛЬНЫХ ФАЙЛОВ
     local_files = []
-
-    # Добавляем цикл для 3-х повторных попыток скачивания
-    for attempt in range(1, 4):
+    for attempt in range(1, 4):  # Делаем 3 попытки на случай разрыва соединения
         for m_url in media_urls:
             downloaded_paths = await download_media(m_url)
             if downloaded_paths:
                 local_files.extend(downloaded_paths)
 
         if local_files:
-            break  # Успешно скачали, выходим из цикла
+            break
         else:
             logger.warning(f"[{submission.id}] Попытка скачивания {attempt}/3 не удалась. Пауза 5 сек...")
             await asyncio.sleep(5)
 
+    # Если скачать так и не удалось, отправляем пост просто текстом со ссылкой
     if not local_files:
         logger.warning(f"[{submission.id}] Файлы не удалось скачать на сервер. Переход к текстовому фоллбэку.")
-        caption_text += f"\n<a href='{short_url}'>Пост на Reddit</a>"
+        caption_parts.append(f"<a href='{short_url}'>Пост на Reddit</a>")
+        caption_text = "\n\n".join(caption_parts)
+
         await send_text_fallback(bot, tg_channel, caption_text, submission.id)
         await asyncio.sleep(3)
         return
 
-    # ПЕРЕВОД ТЕКСТА С КАРТИНОК
+    # 10. РАСПОЗНАВАНИЕ ТЕКСТА С КАРТИНОК (OCR)
+    img_texts = []
     for file_path in local_files:
-        # Проверяем, что скачанный файл — это картинка, а не видео
+        # Обрабатываем только изображения, игнорируем видео
         if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
             logger.info(f"[{submission.id}] Распознаем текст на картинке: {file_path}")
-
-            # Вызываем твой метод перевода
             img_translation = translator.process_image(file_path)
 
-            # Проверяем, что текст найден и нет ошибок
+            # Если текст найден и не является мусором
             if img_translation and not img_translation.startswith("❌"):
-                # ИСПРАВЛЕНИЕ: Обязательно экранируем распознанный текст, чтобы Telegram не принял < > за HTML-теги
                 safe_img_text = format_reddit_text(img_translation)
+                img_texts.append(f"<blockquote><i>{safe_img_text}</i></blockquote>")
 
-                # Добавляем распознанный текст к описанию поста
-                caption_text += f"\n📝 <b>Текст с картинки:</b>\n<blockquote><i>{safe_img_text}</i></blockquote>\n"
+    # Добавляем блок с распознанным текстом, если он есть
+    if img_texts:
+        combined_img_text = "\n".join(img_texts)
+        caption_parts.append(f"📝 <b>Текст с картинки:</b>\n{combined_img_text}")
 
-    # ИСПРАВЛЕНИЕ: Добавляем ссылку на Reddit В САМЫЙ КОНЕЦ (после текста с картинок)
-    caption_text += f"\n<a href='{short_url}'>Пост на Reddit</a>"
+    # 11. ФИНАЛЬНАЯ СБОРКА ТЕКСТА
+    # Добавляем ссылку на оригинал в самый конец и склеиваем все блоки
+    caption_parts.append(f"<a href='{short_url}'>Пост на Reddit</a>")
+    caption_text = "\n\n".join(caption_parts)
 
-    # ПОПЫТКА ОТПРАВИТЬ ЛОКАЛЬНЫЕ ФАЙЛЫ
+    # 12. ОТПРАВКА В TELEGRAM
     try:
         await build_and_send_media(bot, tg_channel, local_files, caption_text, is_url=False)
         await mark_post(submission.id, tg_channel, "sent")
         logger.info(f"[{submission.id}] Успешно отправлен локальным файлом.")
         await asyncio.sleep(3)
     except TelegramRetryAfter as e:
-        logger.warning(f"[{submission.id}] Флуд-контроль (локальный файл)! Ожидание {e.retry_after} сек.")
+        logger.warning(f"[{submission.id}] Флуд-контроль! Ожидание {e.retry_after} сек.")
         await asyncio.sleep(e.retry_after)
     except TelegramAPIError as e:
-        # ИСПРАВЛЕНИЕ: Мы делаем просто return без mark_post().
-        # Если API Telegram упадет, бот не отметит пост как "отправленный/сломанный"
-        # и попытается отправить его снова при следующем обходе ленты.
-        logger.warning(
-            f"[{submission.id}] Ошибка Telegram API при отправке скачанного файла ({e}). Возврат в очередь.")
+        # Если API Telegram упадет, мы просто выходим без отметки "sent",
+        # чтобы бот попытался отправить пост снова в следующем цикле.
+        logger.warning(f"[{submission.id}] Ошибка Telegram API ({e}). Возврат в очередь.")
         return
     finally:
+        # Обязательно очищаем временную папку, чтобы не забить диск сервера
         await clear_data_folder()
 
 

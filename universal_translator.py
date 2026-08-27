@@ -52,24 +52,34 @@ class TranslationModule:
         return text
 
     def _is_garbage_text(self, text: str) -> bool:
+        """
+        Усиленный фильтр от мусора: отсеивает узоры на ткани, ковры и шумы.
+        """
         clean_str = text.strip()
         if len(clean_str) < 3:
             return True
 
-        # Проверка 1: Доля реальных букв
-        letters = re.findall(r'[a-zA-Zа-яА-ЯёЁ]', clean_str)
-        if len(letters) / max(len(clean_str), 1) < 0.4:
+        # Убираем пробелы для точного подсчета символов
+        no_space = clean_str.replace(' ', '')
+        if not no_space:
             return True
 
-        # Проверка 2: Аномально длинные слова (галлюцинации Tesseract на текстурах)
-        words = clean_str.split()
-        for word in words:
-            # Если слово длиннее 20 символов и это не ссылка - это мусор 100%
-            if len(word) > 20 and not word.startswith('http'):
-                return True
+        letters = re.findall(r'[a-zA-Zа-яА-ЯёЁ]', no_space)
+        # Ищем спецсимволы, которые Tesseract генерирует из складок и теней (\, /, <, >)
+        symbols = re.findall(r'[^a-zA-Zа-яА-ЯёЁ0-9\s]', clean_str)
+        vowels = re.findall(r'[aeiouyаеёиоуыэюяAEIOUYАЕЁИОУЫЭЮЯ]', clean_str)
 
-        # Проверка 3: Три и более одинаковые буквы подряд (напр. 'ааааево')
-        if re.search(r'([a-zA-Zа-яА-ЯёЁ])\1{3,}', clean_str):
+        # 1. Если букв меньше 40% от всей массы символов
+        if len(letters) / len(no_space) < 0.4:
+            return True
+
+        # 2. Если спецсимволов слишком много (больше 15% от текста)
+        if len(symbols) / max(len(clean_str), 1) > 0.15:
+            return True
+
+        # 3. Защита от "NNN SSS WAA" (текстуры) - проверяем соотношение гласных
+        # В реальном языке гласных обычно не меньше 20-30% от всех букв
+        if len(letters) > 10 and len(vowels) < (len(letters) * 0.15):
             return True
 
         return False
