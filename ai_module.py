@@ -67,7 +67,15 @@ class AIFallbackModule:
     def _call_gemini_text(self, prompt):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
         headers = {"Content-Type": "application/json"}
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+            ]
+        }
         response = requests.post(url, json=payload, headers=headers)
         if response.status_code != 200:
             raise Exception(f"HTTP {response.status_code}: {response.text}")
@@ -111,7 +119,7 @@ class AIFallbackModule:
         }
         payload = {
             # Используем отличную бесплатную модель из вашего списка OpenRouter
-            "model": "google/gemma-4-26b-a4b",
+            "model": "poolside/laguna-s-2.1:free",
             "messages": [{"role": "user", "content": prompt}]
         }
         response = requests.post(url, json=payload, headers=headers)

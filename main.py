@@ -255,11 +255,14 @@ async def process_submission(bot: Bot, submission, target_config: dict):
     # 4. ПЕРЕВОД ЗАГОЛОВКА
     safe_title = format_reddit_text(submission.title)
 
+    # Удаляем URL из заголовка для проверки наличия реального текста
+    title_no_urls = re.sub(r'http[s]?://\S+', '', safe_title)
+    title_no_urls = re.sub(r'<a href=".*?">.*?</a>', '', title_no_urls)
+
     if not safe_title.strip():
         translate_title = ""
-    # Проверяем, есть ли в строке хотя бы одна буква (кириллица или латиница)
-    elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', safe_title):
-        # Если букв нет (только точка, цифры или смайлик), оставляем оригинал
+    elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', title_no_urls):
+        # Если кроме ссылки или символов ничего нет, оставляем оригинал
         translate_title = safe_title.strip()
     else:
         translate_title = translator.translate_text(safe_title)
@@ -269,12 +272,15 @@ async def process_submission(bot: Bot, submission, target_config: dict):
 
     # 5. ПЕРЕВОД ОСНОВНОГО ТЕКСТА ПОСТА (ЕСЛИ ЕСТЬ)
     if submission.selftext:
-        # Берем только первые 700 символов, чтобы не превысить лимиты Telegram
         safe_text = format_reddit_text(submission.selftext[:700])
+
+        # Удаляем URL из текста для проверки
+        text_no_urls = re.sub(r'http[s]?://\S+', '', safe_text)
+        text_no_urls = re.sub(r'<a href=".*?">.*?</a>', '', text_no_urls)
 
         if not safe_text.strip():
             translated_text = ""
-        elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', safe_text):
+        elif not re.search(r'[a-zA-Zа-яА-ЯёЁ]', text_no_urls):
             translated_text = safe_text.strip()
         else:
             translated_text = translator.translate_text(safe_text)
