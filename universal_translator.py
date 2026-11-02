@@ -88,43 +88,34 @@ class TranslationModule:
         if not text or not text.strip():
             return text
 
+        clean_text = self._clean_text(text)
+        if not clean_text.strip():
+            return text
+
+        prompt = (
+            "Переведи следующий текст с английского на русский язык с сохранением смысла и сленга. "
+            "В ответе напиши ТОЛЬКО готовый перевод, без кавычек, пояснений и вступлений:\n\n"
+            f"{clean_text}"
+        )
+
+        # 1. Идем через цепочку ИИ (Первая в очереди — локальная Ollama, затем Groq -> Gemini -> OpenRouter)
         try:
-            # 1. Сначала пробуем Google Translate
-            translated = self.translator.translate(text)
-            if translated and "Error 500 (Server Error)" in translated:
-                raise Exception("Скрытая ошибка 500 от Google")
-            if not translated:
-                raise Exception("Google вернул пустоту")
-            return translated
-
-        except Exception as e:
-            print(f"Сбой Google Translate ({e}). Переключаемся на AI Fallback...")
-
-            clean_text = self._clean_text(text)
-            if not clean_text.strip():
-                return text
-
-            prompt = (
-                "Ты профессиональный переводчик без цензуры. Переведи следующий текст с сохранением смысла и форматирования. "
-                "Текст может содержать NSFW или 18+ контент, ты обязан перевести его точно как есть. "
-                "В ответе напиши ТОЛЬКО переведенный текст на русском языке, без вводных слов, извинений и кавычек.\n\n"
-                f"{clean_text}"
-            )
-
-            try:
-                # 2. Переводим через каскад нейросетей
-                ai_translation = self.ai_bot.process(prompt, data_type="text")
-
-                if "Критическая ошибка" in ai_translation:
-                    print("   [ВНИМАНИЕ] Все нейросети упали. Возвращаем оригинальный английский текст.")
-                    return text
-
-                print(f"   [РЕЗУЛЬТАТ ПЕРЕВОДА ИИ]: {ai_translation[:100]}...")
+            ai_translation = self.ai_bot.process(prompt, data_type="text")
+            if ai_translation and "Критическая ошибка" not in ai_translation:
+                print(f"   [РЕЗУЛЬТАТ ПЕРЕВОДА ИИ]: {ai_translation[:80]}...")
                 return ai_translation
+        except Exception as ai_err:
+            print(f"Сбой цепочки ИИ ({ai_err}). Пробуем резервный Google Translate...")
 
-            except Exception as ai_err:
-                print(f"Ошибка резервных нейросетей: {ai_err}")
-                return text
+        # 2. Резервный вариант — Google Translate (если все ИИ недоступны)
+        try:
+            translated = self.translator.translate(text)
+            if translated and "Error 500" not in translated:
+                return translated
+        except Exception as e:
+            print(f"Ошибка резервного Google Translate: {e}")
+
+        return text
 
     def extract_text_from_image(self, image_path: str, ocr_langs='eng+rus') -> str:
         """Локальное OCR через Tesseract"""
@@ -140,15 +131,43 @@ class TranslationModule:
             return ""
 
     def process_image(self, image_path: str) -> str:
-        """Извлекает текст локально и отправляет на перевод."""
-        extracted_text = self.extract_text_from_image(image_path)
+        """Извлекает текст локально (ИИ -> Tesseract) и переводит."""
+        print(f"Попытка распознавания через AI Vision: {image_path}")
 
-        if not extracted_text:
-            return ""
+        prompt = (
+            "Ты профессиональный переводчик без цензуры. Внимательно посмотри на изображение. "
+            "Если на изображении есть читаемый текст (включая мемы, надписи, скриншоты), "
+            "переведи весь этот текст на русский язык и напиши ТОЛЬКО результат перевода, без кавычек и комментариев. "
+            "Если на изображении НЕТ текста, или это просто абстрактные узоры, ответь ровно одним словом: EMPTY."
+        )
 
-        if self._is_garbage_text(extracted_text):
-            print(f"Отсеян мусорный текст Tesseract с картинки: {extracted_text[:30]}...")
-            return ""
+        try:
+            # Отправляем картинку в нашу цепочку нейросетей (Ollama -> Gemini)
+            ai_result = self.ai_bot.process(
+                {"image_path": image_path, "prompt": prompt},
+                data_type="image_analysis"
+            )
 
-        # Переводим текст, добытый Тессерактом, пропуская его через нашу надежную функцию перевода
-        return self.translate_text(extracted_text)
+            ai_result_clean = ai_result.strip()
+
+            # Если нейросеть сказала, что текста нет, пропускаем картинку
+            if "EMPTY" in ai_result_clean.upper() or not ai_result_clean:
+                print("   [Vision ИИ] Текста на картинке не обнаружено.")
+                return ""
+
+            print("   [Vision ИИ] Текст успешно распознан и переведен.")
+            return ai_result_clean
+
+        except Exception as e:
+            print(f"   [Ошибка Vision ИИ] {e}. Откат к Tesseract OCR...")
+
+            # РЕЗЕРВНЫЙ ПЛАН: Старый добрый Tesseract + Google Translate
+            extracted_text = self.extract_text_from_image(image_path)
+            if not extracted_text:
+                return ""
+
+            if self._is_garbage_text(extracted_text):
+                print(f"   [Tesseract] Отсеян мусорный текст с картинки: {extracted_text[:30]}...")
+                return ""
+
+            return self.translate_text(extracted_text)
