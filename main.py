@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.types import InputMediaPhoto, InputMediaVideo, URLInputFile, FSInputFile
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramAPIError
+from aiogram.client.session.aiohttp import AiohttpSession
 
 from media_processor import download_media, clear_data_folder
 from universal_translator import TranslationModule
@@ -467,7 +468,13 @@ async def monitor_reddit(bot: Bot):
 
 
 async def main():
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    # Забираем адрес прокси из docker-compose.yml
+    proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+
+    # Принудительно заворачиваем трафик Telegram в прокси и даем 10 минут на отправку видео
+    session = AiohttpSession(proxy=proxy_url, timeout=600)
+
+    bot = Bot(token=TELEGRAM_BOT_TOKEN, session=session)
     try:
         await monitor_reddit(bot)
     finally:

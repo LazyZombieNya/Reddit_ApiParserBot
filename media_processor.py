@@ -460,7 +460,8 @@ async def download_media(url):
     is_reddit_video = "v.redd.it" in clean_url and ext == 'mp4'
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # trust_env=True заставляет aiohttp читать переменные HTTP_PROXY из Docker
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             temp_path = file_path + "_temp"
 
             # --- ЭТАП СКАЧИВАНИЯ ---
