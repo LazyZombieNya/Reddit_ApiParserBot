@@ -10,3 +10,4 @@ emoji
 aiohttp
 aiofiles
 requests
+aiohttp-socks
